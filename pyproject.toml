@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mp3dl"
+version = "1.0.0"
+description = "YouTube の再生リストを mp3 に変換して指定フォルダへダウンロードする CLI"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["yt-dlp>=2024.1.1"]
+
+[project.optional-dependencies]
+thumbnail = ["mutagen"]
+dev = ["pytest"]
+
+[project.scripts]
+mp3dl = "mp3dl.cli:main"
+
+[tool.setuptools]
+packages = ["mp3dl"]
