@@ -1,0 +1,8 @@
+# Windows のバッチファイルは CRLF でないと正しく動かないことがある
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Python はどちらでも動くので LF に統一する
+*.py text eol=lf
+*.pyw text eol=lf
+*.md text eol=lf

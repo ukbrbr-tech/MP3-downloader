@@ -1,145 +1,190 @@
-# mp3dl — YouTube 再生リスト → mp3 ダウンローダー
+# mp3dl
 
-YouTube の再生リストの URL を渡すと、各動画を **mp3 に変換して指定したフォルダへ保存**します。
-保存先フォルダに **既にある曲は自動でスキップ**するので、何度実行しても
-追加された曲だけが差分ダウンロードされます。
+YouTube の再生リストから、**まだ一度も処理していない動画だけ**を mp3 として保存する個人用ツールです。
+同じ再生リストを後日もう一度処理すると、以前処理した動画はスキップし、新しく追加された動画だけを処理します。
 
-**ブラウザの画面（Web UI）** と **コマンドライン** の両方から使えます。
+> 自分がダウンロードする権利を持つ動画、ダウンロードが許可されているコンテンツにのみ使用してください。
 
-## 必要なもの
+## できること
 
-- Python 3.9 以上
-- [ffmpeg](https://ffmpeg.org/)（mp3 変換に使用）
-  - macOS: `brew install ffmpeg`
-  - Ubuntu/Debian: `sudo apt install ffmpeg`
-  - Windows: `winget install Gyan.FFmpeg`
+- YouTube 再生リストの URL を貼るだけで、新規動画だけを mp3 化
+- 重複判定は **YouTube Video ID** 基準（タイトル変更・同名動画でも誤判定しない）
+- mp3 は既定で **320kbps**
+- サムネイルを **アルバムアート**として埋め込み（他の PC やスマホでも表示される JPEG）
+- ID3 タグ（曲名 / チャンネル名 / 再生リスト名 / トラック番号 / 公開日 / 元動画 URL）
+- `01 - 曲名.mp3` 形式のファイル名（Windows で使えない文字は自動で置換）
+- 既存ファイルを上書きしない（`01 - 曲名 (2).mp3` として保存）
+- 4 つのモード：**新規のみ / 全件 / 確認のみ / 選択**
+- シンプルな GUI（進捗バー、成功・スキップ・失敗の件数、ログ表示）
+- 1 曲失敗しても処理は止まらず、失敗した動画は次回また試せる
+
+## 必要なソフト
+
+| 名前 | 用途 | 導入方法 |
+| --- | --- | --- |
+| Python 3.9 以上 | 本体 | https://www.python.org/downloads/windows/ （インストール時に「Add python.exe to PATH」にチェック） |
+| FFmpeg | mp3 変換 | `winget install Gyan.FFmpeg` |
+| yt-dlp | 動画の取得 | `pip install -r requirements.txt` |
+| mutagen | ID3 タグ・アルバムアート | 同上 |
+| pillow | サムネイルの縮小・JPEG 変換 | 同上 |
+| tkinter | GUI | Windows 版 Python に同梱（Linux は `sudo apt install python3-tk`） |
 
 ## インストール
 
-```bash
-git clone https://github.com/ukbrbr-tech/MP3-downloader.git
-cd MP3-downloader
-pip install -r requirements.txt      # yt-dlp
-# もしくは mp3dl コマンドとして入れる場合:
-pip install .
-```
+### Windows（かんたん）
 
-## 使い方 A: ブラウザの画面で使う（おすすめ）
+1. Python をインストールする（「Add python.exe to PATH」を必ずチェック）
+2. このフォルダを好きな場所に置く
+3. **`setup_windows.bat` をダブルクリック**（ライブラリの導入と依存関係の確認をまとめて行います）
+4. FFmpeg が無いと表示されたら、PowerShell で `winget install Gyan.FFmpeg` を実行
 
-cnvmp3 や flvto のような画面で操作できます。次のコマンドでこの PC 上にサーバーが起動し、
-ブラウザが自動で開きます。
+### コマンドで入れる場合
 
 ```bash
-python -m mp3dl --web
+python -m pip install -r requirements.txt
+python -m mp3dl --check-deps      # 足りないものを確認
 ```
 
-画面が開いたら、**再生リストの URL** と **保存先フォルダ** を入れて「ダウンロード開始」を押すだけです。
-進捗・スキップした曲・失敗した曲が一覧で表示され、途中で「中止」もできます。
-終了するときは、起動したターミナルで `Ctrl+C` を押してください。
+FFmpeg を PATH に入れたくない場合は、`ffmpeg.exe` をこのフォルダの `ffmpeg\bin\` に置けば自動で見つけます。
 
-- ポートを変えたいとき: `python -m mp3dl --web --port 9000`
-- ブラウザを自動で開かない: `python -m mp3dl --web --no-browser`（手動で `http://127.0.0.1:8765/` を開く）
+## 起動方法
 
-> **なぜサーバーが要るの？**
-> ブラウザの JavaScript だけでは YouTube から動画を取得できず（CORS で遮断される、
-> ストリーム URL の署名解読が必要、変換用の ffmpeg も無い）、HTML ファイル単体では実現できません。
-> cnvmp3 のようなサイトも、裏側では業者のサーバーが同じ処理をしています。
-> mp3dl はその処理を**自分の PC の中だけ**で行うため、ファイルを外部に送信しません。
-
-サーバーは `127.0.0.1`（自分の PC 内）にのみ待ち受け、外部のサイトからは操作できないように
-Host ヘッダーと Content-Type を検証しています。外部に公開する用途には使わないでください。
-
-## 使い方 B: コマンドラインで使う
-
-```bash
-# 再生リストを ~/Music/MyList に mp3 で保存
-python -m mp3dl "https://www.youtube.com/playlist?list=PLxxxxxxxx" -o ~/Music/MyList
-
-# pip install . した場合は mp3dl コマンドで
-mp3dl "https://www.youtube.com/playlist?list=PLxxxxxxxx" -o ~/Music/MyList
-
-# 何がダウンロードされるか確認するだけ（実際には落とさない）
-mp3dl "URL" -o ~/Music/MyList --dry-run
-
-# 音質を 320kbps にして 3 曲ずつ並列ダウンロード
-mp3dl "URL" -o ~/Music/MyList -q 320 -j 3
-```
-
-実行例:
-
-```
-保存先: /home/me/Music/MyList
-再生リストを読み込んでいます...
-20 曲中 3 曲が新規、17 曲はスキップします。
-  - [スキップ] 夜に駆ける (同名の mp3 が存在)
-  - [スキップ] Lemon (ダウンロード済み (ID 一致))
-  ...
-  ✓ [保存] 新しい曲 1
-  ✓ [保存] 新しい曲 2
-  ✗ [失敗] 限定公開の曲 (Private video)
-
-完了: 2 曲を保存、17 曲をスキップ、1 曲が失敗。
-```
-
-再生リストの URL のほか、単一の動画 URL もそのまま渡せます。
-
-## 既存ファイルをスキップする仕組み
-
-ダウンロード前に保存先フォルダを調べ、次のいずれかに当てはまる曲を飛ばします。
-
-1. **ダウンロード履歴に動画 ID がある** — 保存先フォルダの `.downloaded.txt` に、
-   成功した動画の ID を 1 行ずつ記録します。曲名を後から変えてもスキップされます。
-2. **ファイル名に動画 ID が含まれている** — `曲名 [dQw4w9WgXcQ].mp3` のような
-   ファイル（`--filename-template '%(title)s [%(id)s].%(ext)s'` で作られる形）を認識します。
-3. **同じ曲名の mp3 が既にある** — 大文字小文字・全角半角・記号や空白の違いは無視して
-   比較するので、履歴ファイルが無くても、手動で入れた mp3 や他のツールで落とした
-   mp3 は再ダウンロードされません。サブフォルダの中も対象です。
-
-失敗した曲は履歴に記録されないため、次回の実行で自動的に再挑戦されます。
-途中で `Ctrl+C` を押して中断した場合も、次回は続きから再開できます。
-
-## オプション
-
-| オプション | 説明 |
+| 方法 | コマンド |
 | --- | --- |
-| `-o`, `--output` | mp3 の保存先フォルダ（既定: カレントディレクトリ） |
-| `-q`, `--quality` | mp3 のビットレート kbps（既定: `192`） |
-| `-j`, `--jobs` | 同時ダウンロード数（既定: `1`） |
-| `--filename-template` | yt-dlp 形式のファイル名テンプレート（既定: `%(title)s.%(ext)s`） |
-| `--dry-run` | ダウンロードせず、対象とスキップの一覧だけ表示 |
-| `--no-skip` | スキップを無効にしてすべて取得し直す |
-| `--no-archive` | `.downloaded.txt` を使わず、既存 mp3 だけで判定する |
-| `--embed-thumbnail` | サムネイルをアルバムアートとして埋め込む（`pip install mutagen` が必要） |
-| `--ffmpeg-location` | ffmpeg のパスを明示する |
-| `--cookies-from-browser` | 限定公開・年齢制限付き動画向けにブラウザの Cookie を使う（例: `chrome`） |
-| `-v`, `--verbose` | yt-dlp の詳細ログを表示 |
-| `--web` | ブラウザで操作する画面を起動する |
-| `--port` | `--web` で使うポート番号（既定: `8765`） |
-| `--no-browser` | `--web` でブラウザを自動で開かない |
+| GUI（推奨） | `start_gui.bat` をダブルクリック、または `python -m mp3dl` |
+| GUI（起動しないとき） | `debug_gui.bat` をダブルクリック（エラー内容が画面に残ります） |
+| コマンドライン | `python -m mp3dl "<再生リストURL>" -o "C:\Users\you\Music"` |
+| ブラウザ画面 | `python -m mp3dl --web` |
+| 依存関係の確認 | `python -m mp3dl --check-deps` |
 
-終了コードは、すべて成功で `0`、1 曲でも失敗すると `1`、中断すると `130` です。
-cron や タスクスケジューラで定期実行すれば、再生リストの新曲だけが自動で溜まっていきます。
+## 基本操作（GUI）
 
-## 開発
+1. アプリを起動する
+2. YouTube 再生リストの URL を貼る
+3. 保存先フォルダを選ぶ（初回のみ。次回からは記憶されます）
+4. モードは **「新規のみ」** のまま
+5. **「開始」** を押す
 
-```bash
-pip install pytest
-python -m pytest tests -q
+これだけです。先に中身を見たいときは「確認」を押すと、総数・処理済み・新規件数と新規動画のタイトルが表示されます。
+
+### モード
+
+| モード | 動作 |
+| --- | --- |
+| **新規のみ**（既定） | 履歴に無い動画だけを処理する |
+| 全件 | 再生リスト全体を処理する（既存ファイルは上書きせず別名で保存） |
+| 確認のみ | 総数・処理済み・新規件数と新規動画のタイトルを表示するだけ |
+| 選択 | 「確認」で一覧を出し、チェックを入れた動画だけを処理する |
+
+「選択」モードでは、一覧の左端のチェック欄をクリック（またはキーボードのスペース）で切り替えられます。
+
+### その他の機能
+
+- **登録**：よく使う再生リストを登録しておけます
+- **登録を全て更新**：登録済みの再生リストをまとめて「新規のみ」で更新します
+- **フォルダを開く**：保存先をエクスプローラーで開きます
+- **ダークモード** / **完了時に通知** / **音質(kbps)** / **サムネイルを埋め込む**
+- 最後に使った URL・保存先・モードは自動で記憶されます
+
+## 保存構造
+
+```
+Music/
+└─ My Playlist/
+   ├─ 01 - Song A.mp3
+   ├─ 02 - Song B.mp3
+   ├─ 03 - Song C.mp3
+   ├─ download_archive.txt   ← 処理済み Video ID（これが新規判定の基準）
+   ├─ processed.json         ← 処理済みの記録（タイトル・日時など）
+   └─ app.log                ← 実行ログ
 ```
 
-テストはネットワークに接続しません（yt-dlp をダミーに差し替えて検証しています）。
+保存先は「選んだフォルダ ＋ 再生リスト名」です。再生リストごとに履歴が分かれます。
 
-### 構成
+## 「新規のみ」モードの仕組み
 
-| ファイル | 役割 |
+1. 再生リストを読み込み、各動画の **YouTube Video ID** を取り出す
+2. 保存先フォルダの `download_archive.txt` を読む
+   （`youtube dQw4w9WgXcQ` という形式。yt-dlp の download archive と同じ）
+3. ID がファイルに**無い動画だけ**を処理する
+4. mp3 の作成・タグ付けまで**正常に終わった動画だけ**を履歴へ追記する
+
+判定に使うのは Video ID だけです。ファイル名やタイトルは一切見ません。そのため、
+
+- 動画のタイトルが変わっても、二重ダウンロードになりません
+- 同じ曲名の別動画が追加された場合は、きちんと新規として処理されます
+- 失敗した動画は履歴に残らないので、次回もう一度試されます
+
+例：月曜に 100 動画の再生リストを処理し、金曜に 103 動画になっていた場合、
+金曜に同じ URL を入れると**新しい 3 動画だけ**が処理されます。
+
+## 履歴をリセットする方法
+
+もう一度すべてダウンロードし直したいときは、次のいずれかを行ってください。
+
+| 方法 | 手順 |
 | --- | --- |
-| `mp3dl/library.py` | 保存先フォルダの走査と、既存曲のスキップ判定 |
-| `mp3dl/downloader.py` | 再生リストの展開、mp3 変換、進捗と中止の制御 |
-| `mp3dl/cli.py` | コマンドライン |
-| `mp3dl/web.py` | ローカル Web サーバー（標準ライブラリのみ） |
-| `mp3dl/static/index.html` | ブラウザ画面 |
+| GUI | 「確認」を押した後に **「履歴をリセット」** ボタン |
+| コマンド | `python -m mp3dl "<URL>" -o "<保存先>" --reset-archive` |
+| 手動 | 保存先フォルダの `download_archive.txt` と `processed.json` を削除 |
 
-## 注意
+一部の動画だけやり直したい場合は、`download_archive.txt` から該当する行（Video ID）を削除してください。
 
-ダウンロードは、著作権者が許諾しているコンテンツや自分がアップロードした動画など、
-各サービスの利用規約と各国の法律の範囲内で行ってください。
+## よくあるエラーと対処方法
+
+| 症状 | 原因と対処 |
+| --- | --- |
+| **`start_gui.bat` が一瞬で閉じる / 何も起きない** | **`debug_gui.bat` をダブルクリックしてください。**エラー内容が画面に残り、`mp3dl-error.log` にも記録されます。よくある原因は下の 3 つです |
+| ↳ tkinter が入っていない | 「設定」→「アプリ」→ Python →「変更(Modify)」→「tcl/tk and IDLE」にチェックして再インストール |
+| ↳ Microsoft Store 版 Python のダミーが反応している | 「設定」→「アプリ」→「アプリ実行エイリアス」で python.exe / python3.exe をオフにし、公式版 Python を入れる |
+| ↳ ライブラリが未導入 | `setup_windows.bat` を実行する |
+| `FFmpeg が見つかりません` | FFmpeg 未導入。`winget install Gyan.FFmpeg` を実行するか、`ffmpeg.exe` をこのフォルダの `ffmpeg\bin\` に置く |
+| `yt-dlp がインストールされていません` | `python -m pip install -r requirements.txt` を実行 |
+| GUI が起動しない（`No module named tkinter`） | Windows は Python を「Modify」→ tcl/tk を有効にして再インストール。Linux は `sudo apt install python3-tk` |
+| `Video unavailable` / `Private video` | 動画が非公開・削除済み。再試行しても直らないため、その動画だけ失敗として記録されます |
+| `Sign in to confirm your age` | 年齢制限付き動画。`--cookies-from-browser chrome` を付けて実行（GUI の場合は設定ファイルの `cookies_from_browser`） |
+| `HTTP Error 403` / 途中で止まる | 一時的な通信エラー。自動で 3 回まで再試行します。時間をおいて「開始」を押し直すと、続きから処理されます |
+| 曲名が文字化けしたファイル名になる | Windows で使えない文字が全角に置換されています（仕様） |
+| アルバムアートが表示されない | pillow が未導入だと webp サムネイルを変換できません。`pip install pillow` を実行 |
+| ダウンロードが極端に遅い・止まる | yt-dlp が古い可能性があります。`python -m pip install -U yt-dlp` で更新してください |
+
+うまくいかないときは、保存先フォルダの `app.log` に詳しい記録が残っています。
+
+## コマンドライン
+
+```bash
+python -m mp3dl "<URL>" -o "<保存先>"                # 新規のみ（既定）
+python -m mp3dl "<URL>" -o "<保存先>" --mode check   # 確認のみ
+python -m mp3dl "<URL>" -o "<保存先>" --mode all     # 全件
+python -m mp3dl "<URL>" -o "<保存先>" -q 256         # 音質を変える
+python -m mp3dl "<URL>" --no-subfolder               # 再生リスト名のフォルダを作らない
+python -m mp3dl --check-deps                         # 依存関係の確認
+```
+
+設定は `%APPDATA%\mp3dl\settings.json`（Windows）に保存されます。
+
+## 開発者向け
+
+```
+mp3dl/
+├─ config.py     設定と既定値（ハードコードを避けるための置き場）
+├─ naming.py     Windows で安全なファイル名づくり
+├─ archive.py    処理済み Video ID の履歴
+├─ playlist.py   再生リストの取得（yt-dlp）
+├─ pipeline.py   1 曲の取得・変換・タグ付け
+├─ tagging.py    ID3 タグとアルバムアート（mutagen / pillow）
+├─ job.py        モード（新規のみ / 全件 / 確認のみ / 選択）の制御
+├─ deps.py       依存関係チェック
+├─ gui.py        tkinter の GUI
+├─ cli.py        コマンドライン
+└─ web.py        ブラウザ画面（おまけ）
+```
+
+テストの実行：
+
+```bash
+python -m pip install pytest
+python -m pytest
+```
+
+テストはネットワークを使いません（yt-dlp を差し替えて、ffmpeg で作った短い mp3 を使います）。
