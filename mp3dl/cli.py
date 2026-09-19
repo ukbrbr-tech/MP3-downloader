@@ -27,10 +27,25 @@ def build_parser() -> argparse.ArgumentParser:
         "フォルダに既にある曲は自動でスキップします。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="例:\n"
+        "  mp3dl --web                                        ブラウザ画面を開く\n"
         "  mp3dl 'https://www.youtube.com/playlist?list=PLxxxx' -o ~/Music/MyList\n"
         "  mp3dl URL -o ./out --dry-run\n",
     )
-    parser.add_argument("url", help="YouTube の再生リスト（または動画）の URL")
+    parser.add_argument(
+        "url",
+        nargs="?",
+        help="YouTube の再生リスト（または動画）の URL（--web のときは不要）",
+    )
+    web = parser.add_argument_group("ブラウザ画面 (--web)")
+    web.add_argument(
+        "--web",
+        action="store_true",
+        help="ブラウザで操作する画面をこの PC 上で起動する",
+    )
+    web.add_argument("--port", type=int, default=8765, help="--web で使うポート番号（既定: 8765）")
+    web.add_argument(
+        "--no-browser", action="store_true", help="--web でブラウザを自動で開かない"
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -97,7 +112,16 @@ def _print_result(result: Result) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.web:
+        from .web import serve
+
+        return serve(port=args.port, open_browser=not args.no_browser)
+
+    if not args.url:
+        parser.error("URL を指定してください（ブラウザ画面を使う場合は --web）。")
 
     dest = Path(args.output).expanduser().resolve()
     if args.jobs < 1:

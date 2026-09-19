@@ -18,6 +18,10 @@ class DownloadError(RuntimeError):
     """ダウンロード処理を続行できないときに送出する."""
 
 
+class DownloadCancelled(Exception):
+    """利用者が中止したときに yt-dlp の処理を打ち切るために使う."""
+
+
 @dataclass
 class Track:
     """再生リスト内の 1 曲."""
@@ -32,12 +36,21 @@ class Result:
     """1 曲の処理結果."""
 
     track: Track
-    status: str  # "downloaded" | "skipped" | "failed"
+    status: str  # "downloaded" | "skipped" | "failed" | "cancelled"
     detail: str = ""
 
     @property
     def ok(self) -> bool:
         return self.status != "failed"
+
+
+@dataclass
+class Progress:
+    """1 曲のダウンロード進捗（0〜100%）."""
+
+    track: Track
+    percent: float
+    stage: str  # "downloading" | "converting" | "finished"
 
 
 def _import_ytdlp():
@@ -171,6 +184,54 @@ def _build_options(
     return opts
 
 
+def _clean_error(exc: Exception) -> str:
+    """yt-dlp の例外を 1 行の読めるメッセージにする."""
+    message = str(exc).strip() or exc.__class__.__name__
+    message = message.replace("ERROR: ", "")
+    # "; please report this issue ..." 以降は利用者には不要
+    for marker in ("; please report this issue", "Confirm you are on the latest version"):
+        head, sep, _ = message.partition(marker)
+        if sep:
+            message = head.strip().rstrip(";")
+    return message.splitlines()[0] if message else exc.__class__.__name__
+
+
+def _make_hook(
+    track: Track,
+    on_progress: Callable[[Progress], None] | None,
+    should_stop: Callable[[], bool] | None,
+) -> Callable[[dict], None]:
+    """yt-dlp のダウンロード進捗フック."""
+
+    def hook(status: dict) -> None:
+        if should_stop and should_stop():
+            raise DownloadCancelled
+        if not on_progress:
+            return
+        if status.get("status") == "downloading":
+            total = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
+            done = status.get("downloaded_bytes") or 0
+            percent = (done / total * 100) if total else 0.0
+            # 変換にも時間がかかるので、取得完了で 90% とする
+            on_progress(Progress(track, min(percent, 100.0) * 0.9, "downloading"))
+        elif status.get("status") == "finished":
+            on_progress(Progress(track, 90.0, "converting"))
+
+    return hook
+
+
+def _make_pp_hook(
+    track: Track, on_progress: Callable[[Progress], None] | None
+) -> Callable[[dict], None]:
+    """mp3 変換など後処理の進捗フック."""
+
+    def hook(status: dict) -> None:
+        if on_progress and status.get("status") == "started":
+            on_progress(Progress(track, 95.0, "converting"))
+
+    return hook
+
+
 def download_tracks(
     tracks: Iterable[Track],
     *,
@@ -184,6 +245,8 @@ def download_tracks(
     jobs: int = 1,
     verbose: bool = False,
     on_result: Callable[[Result], None] | None = None,
+    on_progress: Callable[[Progress], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[Result]:
     """曲を 1 つずつ mp3 に変換して保存する.
 
@@ -203,16 +266,30 @@ def download_tracks(
     )
 
     def handle(track: Track) -> Result:
+        if should_stop and should_stop():
+            return Result(track, "cancelled", "中止しました")
+
         # 並列実行中に同じ曲が別スレッドで完了しているかもしれないので直前に再確認する
         reason = library.reason_to_skip(track.video_id, track.title)
         if reason:
             return Result(track, "skipped", reason)
+
+        track_opts = dict(opts)
+        if on_progress or should_stop:
+            track_opts["progress_hooks"] = [_make_hook(track, on_progress, should_stop)]
+            track_opts["postprocessor_hooks"] = [_make_pp_hook(track, on_progress)]
+
         try:
-            with YoutubeDL(dict(opts)) as ydl:
+            with YoutubeDL(track_opts) as ydl:
                 ydl.download([track.url])
+        except DownloadCancelled:
+            return Result(track, "cancelled", "中止しました")
         except Exception as exc:  # yt-dlp は多様な例外を投げる
-            return Result(track, "failed", str(exc).strip() or exc.__class__.__name__)
+            return Result(track, "failed", _clean_error(exc))
+
         library.record(track.video_id, track.title)
+        if on_progress:
+            on_progress(Progress(track, 100.0, "finished"))
         return Result(track, "downloaded")
 
     tracks = list(tracks)

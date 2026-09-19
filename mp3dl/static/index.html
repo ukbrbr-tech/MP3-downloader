@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mp3dl</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%8E%B5%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dfe3e8;
+    --text: #1d2129;
+    --muted: #6b7280;
+    --accent: #c4302b;
+    --accent-text: #ffffff;
+    --ok: #128a4a;
+    --warn: #8a6d00;
+    --err: #c0392b;
+    --bar: #e8eaed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --panel: #1f2227;
+      --border: #32363d;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --bar: #2c3036;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --err: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP",
+                 "Yu Gothic UI", Meiryo, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  input[type=text], input[type=number], select {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .field { margin-bottom: 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > .field { flex: 1 1 140px; margin-bottom: 0; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .checks { display: flex; gap: 20px; flex-wrap: wrap; margin: 16px 0 20px; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+  .check input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .status { font-size: 14px; margin-bottom: 12px; }
+  .counts { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+  .error {
+    background: color-mix(in srgb, var(--err) 12%, transparent);
+    border: 1px solid var(--err);
+    color: var(--err);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 13px;
+    white-space: pre-wrap;
+    margin-bottom: 14px;
+  }
+  ul.items { list-style: none; margin: 0; padding: 0; }
+  ul.items li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+  }
+  ul.items li:first-child { border-top: none; }
+  .mark { width: 18px; text-align: center; flex: none; font-weight: 700; }
+  .mark.done { color: var(--ok); }
+  .mark.failed { color: var(--err); }
+  .mark.skipped, .mark.cancelled { color: var(--muted); }
+  .mark.downloading { color: var(--accent); }
+  .title { flex: 1 1 auto; min-width: 0; }
+  .title .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .title .detail { font-size: 11px; color: var(--muted); }
+  .bar { flex: none; width: 90px; height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  li.skipped .name, li.cancelled .name { color: var(--muted); }
+  .hidden { display: none; }
+  footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>mp3dl</h1>
+  <p class="sub">YouTube の再生リストを mp3 に変換して、指定したフォルダに保存します。フォルダに既にある曲は自動でスキップします。</p>
+
+  <div id="ffmpegWarn" class="panel error hidden">
+    ffmpeg が見つかりません。mp3 への変換に必要です。インストールしてからこの画面を再読み込みしてください。
+    （Mac: <code>brew install ffmpeg</code> / Windows: <code>winget install Gyan.FFmpeg</code> / Ubuntu: <code>sudo apt install ffmpeg</code>）
+  </div>
+
+  <div class="panel">
+    <div class="field">
+      <label for="url">再生リストの URL</label>
+      <input type="text" id="url" placeholder="https://www.youtube.com/playlist?list=..." autocomplete="off" spellcheck="false">
+      <div class="hint">単一の動画の URL でも使えます。</div>
+    </div>
+
+    <div class="field">
+      <label for="folder">保存先フォルダ</label>
+      <input type="text" id="folder" placeholder="/Users/you/Music/mp3dl" autocomplete="off" spellcheck="false">
+      <div class="hint">このパソコン上のパスを入力してください。無ければ自動で作成します。</div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="quality">音質 (kbps)</label>
+        <select id="quality">
+          <option value="128">128</option>
+          <option value="192" selected>192（標準）</option>
+          <option value="256">256</option>
+          <option value="320">320（高音質）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="jobs">同時ダウンロード数</label>
+        <input type="number" id="jobs" value="1" min="1" max="8">
+      </div>
+    </div>
+
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="skipExisting" checked> 既にある曲はスキップする</label>
+      <label class="check"><input type="checkbox" id="dryRun"> 確認のみ（ダウンロードしない）</label>
+    </div>
+
+    <div class="actions">
+      <button id="start" class="primary">ダウンロード開始</button>
+      <button id="cancel" disabled>中止</button>
+      <button id="open">フォルダを開く</button>
+    </div>
+  </div>
+
+  <div id="result" class="panel hidden">
+    <div id="status" class="status"></div>
+    <div id="counts" class="counts"></div>
+    <div id="error" class="error hidden"></div>
+    <ul id="items" class="items"></ul>
+  </div>
+
+  <footer>著作権者が許諾しているコンテンツの範囲でご利用ください。</footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var timer = null;
+
+  var MARKS = {
+    pending: "·", downloading: "▸", done: "✓",
+    skipped: "–", failed: "✗", cancelled: "–"
+  };
+  var LABELS = {
+    analyzing: "読み込み中", running: "ダウンロード中",
+    done: "完了", error: "エラー", cancelled: "中止しました", idle: ""
+  };
+
+  function api(path, body) {
+    var opts = { method: body ? "POST" : "GET", headers: {} };
+    if (body) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(path, opts).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) { throw new Error(data.error || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  function remember() {
+    try {
+      localStorage.setItem("mp3dl", JSON.stringify({
+        url: $("url").value,
+        folder: $("folder").value,
+        quality: $("quality").value,
+        jobs: $("jobs").value
+      }));
+    } catch (e) { /* プライベートモードなどでは保存しない */ }
+  }
+
+  function restore(defaults) {
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem("mp3dl") || "{}"); } catch (e) { saved = {}; }
+    $("folder").value = saved.folder || defaults.defaultFolder || "";
+    $("url").value = saved.url || "";
+    if (saved.quality) { $("quality").value = saved.quality; }
+    if (saved.jobs) { $("jobs").value = saved.jobs; }
+  }
+
+  function render(state) {
+    if (!state || state.status === "idle") { return; }
+    $("result").classList.remove("hidden");
+
+    var label = LABELS[state.status] || state.status;
+    $("status").textContent = state.message ? (label ? label + " — " + state.message : state.message) : label;
+
+    var c = state.counts || {};
+    $("counts").textContent = c.total
+      ? "全 " + c.total + " 曲 / 保存 " + (c.done || 0) + " ・ スキップ " + (c.skipped || 0) +
+        " ・ 失敗 " + (c.failed || 0)
+      : "";
+
+    if (state.error) {
+      $("error").textContent = state.error;
+      $("error").classList.remove("hidden");
+    } else {
+      $("error").classList.add("hidden");
+    }
+
+    var list = $("items");
+    list.textContent = "";
+    (state.items || []).forEach(function (item) {
+      var li = document.createElement("li");
+      li.className = item.status;
+
+      var mark = document.createElement("span");
+      mark.className = "mark " + item.status;
+      mark.textContent = MARKS[item.status] || "·";
+      li.appendChild(mark);
+
+      var title = document.createElement("span");
+      title.className = "title";
+      var name = document.createElement("div");
+      name.className = "name";
+      name.textContent = item.title;
+      name.title = item.title;
+      title.appendChild(name);
+      if (item.detail) {
+        var detail = document.createElement("div");
+        detail.className = "detail";
+        detail.textContent = item.detail;
+        title.appendChild(detail);
+      }
+      li.appendChild(title);
+
+      if (item.status === "downloading") {
+        var bar = document.createElement("span");
+        bar.className = "bar";
+        var fill = document.createElement("i");
+        fill.style.width = (item.percent || 0) + "%";
+        bar.appendChild(fill);
+        li.appendChild(bar);
+      }
+      list.appendChild(li);
+    });
+
+    var busy = state.status === "analyzing" || state.status === "running";
+    $("start").disabled = busy;
+    $("cancel").disabled = !busy;
+    if (!busy) { stopPolling(); }
+  }
+
+  function poll() {
+    api("/api/state").then(render).catch(function () { /* 再試行に任せる */ });
+  }
+
+  function startPolling() {
+    if (timer) { return; }
+    timer = setInterval(poll, 600);
+    poll();
+  }
+
+  function stopPolling() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  function showError(message) {
+    $("result").classList.remove("hidden");
+    $("status").textContent = "";
+    $("counts").textContent = "";
+    $("items").textContent = "";
+    $("error").textContent = message;
+    $("error").classList.remove("hidden");
+  }
+
+  $("start").addEventListener("click", function () {
+    remember();
+    $("start").disabled = true;
+    api("/api/start", {
+      url: $("url").value.trim(),
+      folder: $("folder").value.trim(),
+      quality: $("quality").value,
+      jobs: parseInt($("jobs").value, 10) || 1,
+      dryRun: $("dryRun").checked,
+      skipExisting: $("skipExisting").checked
+    }).then(function () {
+      startPolling();
+    }).catch(function (err) {
+      $("start").disabled = false;
+      showError(err.message);
+    });
+  });
+
+  $("cancel").addEventListener("click", function () {
+    $("cancel").disabled = true;
+    api("/api/cancel", {}).catch(function (err) { showError(err.message); });
+  });
+
+  $("open").addEventListener("click", function () {
+    api("/api/open-folder", { folder: $("folder").value.trim() })
+      .catch(function (err) { showError(err.message); });
+  });
+
+  $("url").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { $("start").click(); }
+  });
+
+  api("/api/config").then(function (config) {
+    restore(config);
+    if (!config.hasFfmpeg) { $("ffmpegWarn").classList.remove("hidden"); }
+    return api("/api/state");
+  }).then(function (state) {
+    render(state);
+    if (state && (state.status === "analyzing" || state.status === "running")) { startPolling(); }
+  }).catch(function () { /* 初回読み込みに失敗しても操作はできる */ });
+})();
+</script>
+</body>
+</html>

@@ -19,3 +19,6 @@ mp3dl = "mp3dl.cli:main"
 
 [tool.setuptools]
 packages = ["mp3dl"]
+
+[tool.setuptools.package-data]
+mp3dl = ["static/*.html"]
