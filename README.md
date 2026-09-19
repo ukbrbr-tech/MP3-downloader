@@ -52,6 +52,7 @@ FFmpeg を PATH に入れたくない場合は、`ffmpeg.exe` をこのフォル
 | 方法 | コマンド |
 | --- | --- |
 | GUI（推奨） | `start_gui.bat` をダブルクリック、または `python -m mp3dl` |
+| GUI（起動しないとき） | `debug_gui.bat` をダブルクリック（エラー内容が画面に残ります） |
 | コマンドライン | `python -m mp3dl "<再生リストURL>" -o "C:\Users\you\Music"` |
 | ブラウザ画面 | `python -m mp3dl --web` |
 | 依存関係の確認 | `python -m mp3dl --check-deps` |
@@ -133,6 +134,10 @@ Music/
 
 | 症状 | 原因と対処 |
 | --- | --- |
+| **`start_gui.bat` が一瞬で閉じる / 何も起きない** | **`debug_gui.bat` をダブルクリックしてください。**エラー内容が画面に残り、`mp3dl-error.log` にも記録されます。よくある原因は下の 3 つです |
+| ↳ tkinter が入っていない | 「設定」→「アプリ」→ Python →「変更(Modify)」→「tcl/tk and IDLE」にチェックして再インストール |
+| ↳ Microsoft Store 版 Python のダミーが反応している | 「設定」→「アプリ」→「アプリ実行エイリアス」で python.exe / python3.exe をオフにし、公式版 Python を入れる |
+| ↳ ライブラリが未導入 | `setup_windows.bat` を実行する |
 | `FFmpeg が見つかりません` | FFmpeg 未導入。`winget install Gyan.FFmpeg` を実行するか、`ffmpeg.exe` をこのフォルダの `ffmpeg\bin\` に置く |
 | `yt-dlp がインストールされていません` | `python -m pip install -r requirements.txt` を実行 |
 | GUI が起動しない（`No module named tkinter`） | Windows は Python を「Modify」→ tcl/tk を有効にして再インストール。Linux は `sudo apt install python3-tk` |

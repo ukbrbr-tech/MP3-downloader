@@ -14,3 +14,4 @@ app.log
 .downloaded.txt
 .mp3dl-tmp/
 .pytest_cache/
+mp3dl-error.log
