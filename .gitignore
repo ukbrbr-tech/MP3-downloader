@@ -6,6 +6,11 @@ venv/
 build/
 dist/
 downloads/
+Music/
 *.mp3
+download_archive.txt
+processed.json
+app.log
 .downloaded.txt
+.mp3dl-tmp/
 .pytest_cache/

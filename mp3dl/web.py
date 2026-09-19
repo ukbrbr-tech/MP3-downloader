@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import shutil
 import subprocess
 import sys
 import threading
@@ -19,19 +18,11 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .downloader import (
-    DEFAULT_FILENAME_TEMPLATE,
-    DEFAULT_QUALITY,
-    DownloadError,
-    Progress,
-    Result,
-    Track,
-    download_tracks,
-    ensure_ffmpeg,
-    fetch_tracks,
-    plan,
-)
-from .library import Library
+from .deps import find_ffmpeg
+from .config import DEFAULT_QUALITY, Settings, default_music_root
+from .job import Plan, make_plan, run_plan
+from .pipeline import CANCELLED, DOWNLOADED, FAILED, DownloadError, Progress, Result
+from .playlist import PlaylistError, Track
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_BODY_BYTES = 64 * 1024
@@ -41,13 +32,8 @@ ALLOWED_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
 
 def default_folder() -> Path:
-    """保存先の初期値（~/Music か、無ければ ~/Downloads）."""
-    home = Path.home()
-    for name in ("Music", "ミュージック", "Downloads"):
-        candidate = home / name
-        if candidate.is_dir():
-            return candidate / "mp3dl"
-    return home / "mp3dl"
+    """保存先の初期値（<ホーム>/Music）."""
+    return default_music_root()
 
 
 @dataclass
@@ -82,56 +68,63 @@ class Job:
     jobs: int = 1
     dry_run: bool = False
     skip_existing: bool = True
-    filename_template: str = DEFAULT_FILENAME_TEMPLATE
     cookies_from_browser: str | None = None
 
     status: str = "analyzing"  # analyzing | running | done | error | cancelled
     message: str = "再生リストを読み込んでいます..."
     error: str = ""
     items: list[Item] = field(default_factory=list)
-    _by_track: dict[int, Item] = field(default_factory=dict, repr=False)
+    destination: Path | None = None
+    _by_key: dict[str, Item] = field(default_factory=dict, repr=False)
     _stop: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def mode(self) -> str:
+        """画面のチェックボックスから、処理モードを決める."""
+        if self.dry_run:
+            return "check"
+        return "new" if self.skip_existing else "all"
+
+    def settings(self) -> Settings:
+        base = Settings.load()
+        base.quality = self.quality
+        base.cookies_from_browser = self.cookies_from_browser or ""
+        return base
 
     # ------------------------------------------------------------------ 実行
 
     def run(self) -> None:
+        settings = self.settings()
         try:
-            if not self.dry_run:
-                ensure_ffmpeg(None)
-            tracks = fetch_tracks(self.url, cookies_from_browser=self.cookies_from_browser)
-            if not tracks:
-                raise DownloadError("ダウンロードできる動画が見つかりませんでした。")
-            self._prepare(tracks)
-        except DownloadError as exc:
+            plan = make_plan(self.url, self.folder, settings=settings)
+        except (PlaylistError, DownloadError) as exc:
             self._fail(str(exc))
             return
         except Exception as exc:  # 想定外でも画面にはきちんと出す
             self._fail(f"再生リストを読み込めませんでした: {exc}")
             return
 
+        self._prepare(plan)
+
         if self.dry_run:
             self._finish("確認のみ（ダウンロードはしていません）")
             return
 
-        pending = [track for track, item in self._pending_pairs()]
-        if not pending:
-            self._finish("すべてダウンロード済みです。")
+        targets = plan.tracks_for_mode(self.mode)
+        if not targets:
+            self._finish("すべて処理済みです。")
             return
 
         with self._lock:
             self.status = "running"
-            self.message = f"{len(pending)} 曲をダウンロードしています..."
+            self.message = f"{len(targets)} 曲をダウンロードしています..."
 
         try:
-            download_tracks(
-                pending,
-                dest=self.folder,
-                library=self._library,
-                filename_template=self.filename_template,
-                quality=self.quality,
-                cookies_from_browser=self.cookies_from_browser,
-                jobs=self.jobs,
+            run_plan(
+                plan,
+                mode=self.mode,
+                settings=settings,
                 on_result=self._on_result,
                 on_progress=self._on_progress,
                 should_stop=self._stop.is_set,
@@ -156,44 +149,41 @@ class Job:
 
     # ------------------------------------------------------------ 内部処理
 
-    def _prepare(self, tracks: list[Track]) -> None:
-        self._library = Library.scan(self.folder)
-        if not self.skip_existing:
-            self._library.video_ids.clear()
-            self._library.title_keys.clear()
+    @staticmethod
+    def _key(track: Track) -> str:
+        return track.video_id or track.url
 
-        self._plan = plan(tracks, self._library)
+    def _prepare(self, plan: Plan) -> None:
+        self.destination = plan.destination
+        done_keys = {self._key(t) for t in plan.done_tracks}
         with self._lock:
-            for track, reason in self._plan:
+            for track in plan.playlist.tracks:
                 item = Item(title=track.title, video_id=track.video_id, url=track.url)
-                if reason:
+                if self.skip_existing and self._key(track) in done_keys:
                     item.status = "skipped"
-                    item.detail = reason
+                    item.detail = "処理済み (Video ID 一致)"
                 self.items.append(item)
-                self._by_track[id(track)] = item
-
-    def _pending_pairs(self) -> list[tuple[Track, Item]]:
-        return [
-            (track, self._by_track[id(track)])
-            for track, reason in self._plan
-            if reason is None
-        ]
+                self._by_key[self._key(track)] = item
 
     def _on_progress(self, progress: Progress) -> None:
-        item = self._by_track.get(id(progress.track))
+        item = self._by_key.get(self._key(progress.track))
         if not item:
             return
+        stage_text = {
+            "converting": "mp3 に変換しています...",
+            "tagging": "タグを書き込んでいます...",
+        }.get(progress.stage, "")
         with self._lock:
             item.percent = progress.percent
             if progress.stage != "finished":
                 item.status = "downloading"
-                item.detail = "変換しています..." if progress.stage == "converting" else ""
+                item.detail = stage_text
 
     def _on_result(self, result: Result) -> None:
-        item = self._by_track.get(id(result.track))
+        item = self._by_key.get(self._key(result.track))
         if not item:
             return
-        mapping = {"downloaded": "done", "skipped": "skipped", "failed": "failed"}
+        mapping = {DOWNLOADED: "done", "skipped": "skipped", FAILED: "failed", CANCELLED: "cancelled"}
         with self._lock:
             item.status = mapping.get(result.status, result.status)
             item.detail = result.detail
@@ -225,7 +215,7 @@ class Job:
                 "status": self.status,
                 "message": self.message,
                 "error": self.error,
-                "folder": str(self.folder),
+                "folder": str(self.destination or self.folder),
                 "dryRun": self.dry_run,
                 "finished": self.status in ("done", "error", "cancelled"),
                 "counts": counts,
@@ -303,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "defaultFolder": str(default_folder()),
-                    "hasFfmpeg": shutil.which("ffmpeg") is not None,
+                    "hasFfmpeg": find_ffmpeg() is not None,
                     "defaultQuality": DEFAULT_QUALITY,
                 }
             )
